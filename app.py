@@ -158,6 +158,7 @@ def process_excel(input_file, template_file):
 
 import base64
 import glob
+import os
 
 # Helper to find template file
 def find_template_file():
