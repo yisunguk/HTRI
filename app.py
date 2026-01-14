@@ -197,7 +197,7 @@ tab1, tab2 = st.tabs(["📂 Data Processing", "⚙️ Mapping Settings"])
 # --- Tab 1: Processing ---
 with tab1:
     st.markdown("### Upload & Process")
-    st.info("Upload your Input File. The app will use the settings defined in the 'Mapping Settings' tab.")
+    # st.info("Upload your Input File. The app will use the settings defined in the 'Mapping Settings' tab.")
     
     col1, col2 = st.columns(2)
     with col1:
@@ -206,7 +206,7 @@ with tab1:
         found_template = find_template_file()
         if found_template:
             template_file = found_template
-            st.success(f"Using template: '{found_template}'")
+            # st.success(f"Using template: '{found_template}'")
         else:
             template_file = st.file_uploader("2. Upload Template File (Form)", type=['xlsx'])
             st.warning("No template file found. Please upload one.")
