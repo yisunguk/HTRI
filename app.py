@@ -178,6 +178,12 @@ with col2:
         st.success("Using default 'template.xlsx' from repository.")
     else:
         template_file = st.file_uploader("2. Upload Template File (Form)", type=['xlsx'])
+        st.warning("Default 'template.xlsx' not found in repository. Please upload it to GitHub if you want to fix it.")
+
+# Debugging: Show available files
+with st.sidebar.expander("Debug: File System"):
+    st.write("Current Directory:", os.getcwd())
+    st.write("Files:", os.listdir())
 
 if input_file and template_file:
     if st.button("Process Excel Files"):
