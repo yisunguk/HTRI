@@ -2,153 +2,179 @@ import streamlit as st
 import pandas as pd
 import openpyxl
 from io import BytesIO
-from copy import copy
+import base64
+import glob
+import os
+import json
 
-def copy_sheet(source_sheet, target_workbook, new_title):
-    """
-    Helper to copy a sheet within the same workbook or to a new one.
-    For openpyxl, copying a sheet is simplest by using the built-in copy_worksheet.
-    """
-    target_sheet = target_workbook.copy_worksheet(source_sheet)
-    target_sheet.title = new_title
-    return target_sheet
+# --- Default Configuration ---
+DEFAULT_MAPPING_RULES = {
+    "Service of Unit": ["I8"],
+    "Item No.": ["AV8"],
+    "Size": [ ["E9", "M9", "N9"] ], 
+    "Type": ["Y9", "V49"], 
+    "Surf/Unit (Gross/Eff)": [ ["K10", "O10", "P10"] ],
+    "Fluid Name": ["T13", "AR13"], 
+    "Fluid Quantity, Total": ["T14", "AR14"],
+    "Temperature (In/Out)": [ 
+        {"action": "vertical", "cells": ["T20", "AF20"]}, 
+        {"action": "vertical", "cells": ["AR20", "BD20"]} 
+    ],
+    "Inlet Pressure": ["AB28", "AZ28"],
+    "Velocity": ["AB29", "AZ29"],
+    "Pressure Drop, Allow/Calc": [ 
+        {"action": "vertical", "cells": ["T30", "AF30"]}, 
+        {"action": "vertical", "cells": ["AR30", "BD30"]} 
+    ],
+    "Heat Exchanged": ["M32"],
+    "MTD (Corrected)": ["BB32"],
+    "Transfer Rate, Service": ["M33"],
+    "Clean": ["AH33"],
+    "Actual": ["BB33"],
+    "Design/Test Pressure": ["T36"],
+    "Design Temperature": ["T37"],
+    "No Passes per Shell": ["T38"],
+    "Tube No.": ["F43"],
+    "OD": ["N43", "AC45"], 
+    "Thk(Avg)": ["AC43"],
+    "Length": ["AR43"],
+    "Pitch": ["BG43"],
+    "Tube Type": ["F44"],
+    "Material": ["AH44"],
+    "Tube pattern": ["BM44"],
+    "Shell": ["E45"],
+    "ID": ["U45"],
+    "Shell Cover": ["AU45"],
+    "Channel or Bonnet": ["K46"],
+    "Channel Cover": ["AU46"],
+    "Tubesheet-Stationary": ["K47"],
+    "Tubesheet-Floating": ["AW47"],
+    "Floating Head Cover": ["K48"],
+    "Impingement Plate": ["AW48"],
+    "Baffles-Cross": ["H49"],
+    "%Cut (Diam)": ["AM49"],
+    "Spacing(c/c)": ["AX49"],
+    "Inlet": ["BG49"],
+    "TEMA Class": ["BA57"]
+}
 
-def process_excel(input_file, template_file):
-    # Advanced Mapping Rules
-    # Key: Label in Template
-    # Value: List of rules for each occurrence of the label.
-    #   - String: Single Cell Address (e.g., "I8")
-    #   - List: Multiple Cells to MERGE into one (e.g., ["E9", "M9", "N9"])
-    #   - Dict: Special Action (e.g., {"action": "vertical", "cells": ["T20", "AF20"]})
+# --- Helper Functions ---
+
+def rules_to_df(rules_dict):
+    """Convert mapping rules dict to a flat DataFrame for editing."""
+    rows = []
+    for label, rule_list in rules_dict.items():
+        for idx, rule in enumerate(rule_list):
+            row = {
+                "Label": label,
+                "Order": idx + 1,
+                "Type": "Single",
+                "Cells": ""
+            }
+            
+            if isinstance(rule, list):
+                row["Type"] = "Merge"
+                row["Cells"] = ", ".join(rule)
+            elif isinstance(rule, dict) and rule.get("action") == "vertical":
+                row["Type"] = "Vertical"
+                row["Cells"] = ", ".join(rule["cells"])
+            else:
+                row["Type"] = "Single"
+                row["Cells"] = str(rule)
+            
+            rows.append(row)
     
-    MAPPING_RULES = {
-        "Service of Unit": ["I8"],
-        "Item No.": ["AV8"],
-        "Size": [ ["E9", "M9", "N9"] ], # Merge 3 cells
-        "Type": ["Y9", "V49"], # 1st occurrence (Unit), 2nd (Baffles)
-        "Surf/Unit (Gross/Eff)": [ ["K10", "O10", "P10"] ],
-        
-        # Shell Side (1) and Tube Side (2)
-        "Fluid Name": ["T13", "AR13"], 
-        "Fluid Quantity, Total": ["T14", "AR14"],
-        
-        # Temperature: Vertical Split (In / Out)
-        "Temperature (In/Out)": [ 
-            {"action": "vertical", "cells": ["T20", "AF20"]}, # Shell Side
-            {"action": "vertical", "cells": ["AR20", "BD20"]} # Tube Side
-        ],
-        
-        "Inlet Pressure": ["AB28", "AZ28"],
-        "Velocity": ["AB29", "AZ29"],
-        
-        # Pressure Drop: Vertical Split (Allow / Calc)
-        "Pressure Drop, Allow/Calc": [ 
-            {"action": "vertical", "cells": ["T30", "AF30"]}, # Shell Side
-            {"action": "vertical", "cells": ["AR30", "BD30"]} # Tube Side
-        ],
-        
-        "Heat Exchanged": ["M32"],
-        "MTD (Corrected)": ["BB32"],
-        "Transfer Rate, Service": ["M33"],
-        "Clean": ["AH33"],
-        "Actual": ["BB33"],
-        
-        "Design/Test Pressure": ["T36"],
-        "Design Temperature": ["T37"],
-        "No Passes per Shell": ["T38"],
-        
-        "Tube No.": ["F43"],
-        "OD": ["N43", "AC45"], # 1st (Tube), 2nd (Shell)
-        "Thk(Avg)": ["AC43"],
-        "Length": ["AR43"],
-        "Pitch": ["BG43"],
-        "Tube Type": ["F44"],
-        "Material": ["AH44"],
-        "Tube pattern": ["BM44"],
-        
-        "Shell": ["E45"],
-        "ID": ["U45"],
-        "Shell Cover": ["AU45"],
-        "Channel or Bonnet": ["K46"],
-        "Channel Cover": ["AU46"],
-        "Tubesheet-Stationary": ["K47"],
-        "Tubesheet-Floating": ["AW47"],
-        "Floating Head Cover": ["K48"],
-        "Impingement Plate": ["AW48"],
-        "Baffles-Cross": ["H49"],
-        
-        "%Cut (Diam)": ["AM49"],
-        "Spacing(c/c)": ["AX49"],
-        "Inlet": ["BG49"],
-        "TEMA Class": ["BA57"]
-    }
+    return pd.DataFrame(rows)
 
-    def get_cell_value(sheet, addr):
-        val = sheet[addr].value
-        return str(val) if val is not None else ""
+def df_to_rules(df):
+    """Convert edited DataFrame back to mapping rules dict."""
+    rules_dict = {}
+    
+    # Sort by Label and Order to ensure correct list order
+    df = df.sort_values(by=["Label", "Order"])
+    
+    for _, row in df.iterrows():
+        label = row["Label"]
+        rtype = row["Type"]
+        cells_str = row["Cells"]
+        
+        # Parse cells
+        cells = [c.strip() for c in cells_str.split(",") if c.strip()]
+        
+        if not cells:
+            continue
+            
+        rule = None
+        if rtype == "Merge":
+            rule = cells
+        elif rtype == "Vertical":
+            rule = {"action": "vertical", "cells": cells}
+        else: # Single
+            rule = cells[0]
+            
+        if label not in rules_dict:
+            rules_dict[label] = []
+        
+        rules_dict[label].append(rule)
+        
+    return rules_dict
 
+def find_template_file():
+    if os.path.exists("template.xlsx"): return "template.xlsx"
+    for file in os.listdir():
+        if file.lower() == "template.xlsx": return file
+    xlsx_files = [f for f in os.listdir() if f.endswith(".xlsx")]
+    ignore_list = ["processed_output.xlsx", "dummy_input.xlsx", "dummy_template.xlsx"]
+    candidates = [f for f in xlsx_files if f not in ignore_list and not f.startswith("dummy_") and not f.startswith("~$")]
+    return candidates[0] if candidates else None
+
+def get_cell_value(sheet, addr):
+    val = sheet[addr].value
+    return str(val) if val is not None else ""
+
+def process_excel(input_file, template_file, mapping_rules):
     template_wb = openpyxl.load_workbook(template_file)
     template_sheet = template_wb.active
     
     input_wb = openpyxl.load_workbook(input_file, data_only=True)
     input_sheet_names = input_wb.sheetnames
     
-    # Iterate through each input sheet
     for i, sheet_name in enumerate(input_sheet_names):
         input_sheet = input_wb[sheet_name]
-        
-        # Determine Target Column in Template
-        # Sheet 1 -> Column C (3)
         target_col_idx = 3 + i
-        
-        # Write Sheet Name/Index at the top (Row 1)
         template_sheet.cell(row=1, column=target_col_idx).value = i + 1
         
-        # Track usage of duplicates for this column
-        duplicate_counters = {key: 0 for key in MAPPING_RULES}
+        duplicate_counters = {key: 0 for key in mapping_rules}
         
-        # Iterate through Template Rows
         for row_idx in range(2, 150):
             label_cell = template_sheet.cell(row=row_idx, column=1)
             label = label_cell.value
             
             if label:
                 label = str(label).strip()
-                
-                if label in MAPPING_RULES:
-                    rules = MAPPING_RULES[label]
+                if label in mapping_rules:
+                    rules = mapping_rules[label]
                     counter = duplicate_counters[label]
                     
                     if counter < len(rules):
                         rule = rules[counter]
-                        
                         try:
                             if isinstance(rule, dict) and rule.get("action") == "vertical":
-                                # Vertical Split
                                 cells = rule["cells"]
-                                # Write first value to current row
                                 val1 = get_cell_value(input_sheet, cells[0])
                                 template_sheet.cell(row=row_idx, column=target_col_idx).value = val1
-                                
-                                # Write second value to next row (row_idx + 1)
                                 if len(cells) > 1:
                                     val2 = get_cell_value(input_sheet, cells[1])
                                     template_sheet.cell(row=row_idx + 1, column=target_col_idx).value = val2
-                                    
                             elif isinstance(rule, list):
-                                # Merge
                                 values = [get_cell_value(input_sheet, addr) for addr in rule]
                                 merged_value = " ".join([v for v in values if v])
                                 template_sheet.cell(row=row_idx, column=target_col_idx).value = merged_value
-                                
                             else:
-                                # Single String
                                 val = get_cell_value(input_sheet, rule)
                                 template_sheet.cell(row=row_idx, column=target_col_idx).value = val
-                                
                         except Exception as e:
-                            print(f"Error processing {label} at row {row_idx}: {e}")
-                        
+                            print(f"Error processing {label}: {e}")
                         duplicate_counters[label] += 1
 
     output = BytesIO()
@@ -156,84 +182,105 @@ def process_excel(input_file, template_file):
     output.seek(0)
     return output
 
-import base64
-import glob
-import os
-
-# Helper to find template file
-def find_template_file():
-    # Check specific name first
-    if os.path.exists("template.xlsx"):
-        return "template.xlsx"
-    
-    # Check case-insensitive
-    for file in os.listdir():
-        if file.lower() == "template.xlsx":
-            return file
-            
-    # Check any xlsx that is not input/output/dummy
-    # This is risky but helpful if user named it "Form.xlsx"
-    xlsx_files = [f for f in os.listdir() if f.endswith(".xlsx")]
-    ignore_list = ["processed_output.xlsx", "dummy_input.xlsx", "dummy_template.xlsx"]
-    candidates = [f for f in xlsx_files if f not in ignore_list and not f.startswith("dummy_") and not f.startswith("~$")]
-    
-    if candidates:
-        return candidates[0] # Return the first likely candidate
-    
-    return None
+# --- Main App ---
 
 st.set_page_config(page_title="Excel Auto-Filler", layout="wide")
-
 st.title("Excel Data Automation App")
-st.markdown("""
-**Instructions:**
-1. Upload the **Input Data File** (contains the data).
-2. The app will automatically look for a template file in the repository.
-""")
 
-col1, col2 = st.columns(2)
+# Initialize Session State
+if "mapping_rules" not in st.session_state:
+    st.session_state.mapping_rules = DEFAULT_MAPPING_RULES
 
-with col1:
-    input_file = st.file_uploader("1. Upload Input File (Data)", type=['xlsx'])
+# Tabs
+tab1, tab2 = st.tabs(["📂 Data Processing", "⚙️ Mapping Settings"])
 
-with col2:
-    found_template = find_template_file()
+# --- Tab 1: Processing ---
+with tab1:
+    st.markdown("### Upload & Process")
+    st.info("Upload your Input File. The app will use the settings defined in the 'Mapping Settings' tab.")
     
-    if found_template:
-        template_file = found_template
-        st.success(f"Using template file: '{found_template}'")
-    else:
-        template_file = st.file_uploader("2. Upload Template File (Form)", type=['xlsx'])
-        st.warning("No template file found in repository. Please upload one.")
+    col1, col2 = st.columns(2)
+    with col1:
+        input_file = st.file_uploader("1. Upload Input File (Data)", type=['xlsx'])
+    with col2:
+        found_template = find_template_file()
+        if found_template:
+            template_file = found_template
+            st.success(f"Using template: '{found_template}'")
+        else:
+            template_file = st.file_uploader("2. Upload Template File (Form)", type=['xlsx'])
+            st.warning("No template file found. Please upload one.")
 
-# Debugging & Tools
+    if input_file and template_file:
+        if st.button("Process Excel Files", type="primary"):
+            try:
+                with st.spinner("Processing..."):
+                    result_file = process_excel(input_file, template_file, st.session_state.mapping_rules)
+                st.success("Processing Complete!")
+                st.download_button(
+                    label="Download Result Excel",
+                    data=result_file,
+                    file_name="processed_output.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+            except Exception as e:
+                st.error(f"An error occurred: {e}")
+
+# --- Tab 2: Settings ---
+with tab2:
+    st.markdown("### ⚙️ Configure Mapping Rules")
+    st.markdown("""
+    - **Label**: The text in Column A of your Template file.
+    - **Type**: 
+        - `Single`: One cell (e.g., I8).
+        - `Merge`: Multiple cells combined (e.g., E9, M9).
+        - `Vertical`: Split into two rows (e.g., In/Out Temp).
+    - **Cells**: Cell addresses separated by comma.
+    - **Order**: If a label appears multiple times, use 1, 2, 3... to specify which rule applies to which occurrence.
+    """)
+    
+    # Convert current rules to DF
+    current_df = rules_to_df(st.session_state.mapping_rules)
+    
+    # Data Editor
+    edited_df = st.data_editor(
+        current_df,
+        num_rows="dynamic",
+        column_config={
+            "Type": st.column_config.SelectboxColumn(
+                "Mapping Type",
+                options=["Single", "Merge", "Vertical"],
+                required=True
+            ),
+            "Order": st.column_config.NumberColumn(
+                "Order",
+                min_value=1,
+                step=1,
+                required=True
+            )
+        },
+        use_container_width=True,
+        hide_index=True
+    )
+    
+    # Save Button
+    if st.button("Save Settings"):
+        try:
+            new_rules = df_to_rules(edited_df)
+            st.session_state.mapping_rules = new_rules
+            st.success("Settings saved successfully! Switch to the 'Data Processing' tab to use them.")
+            # Optional: Show JSON for verification
+            # st.json(new_rules)
+        except Exception as e:
+            st.error(f"Error saving settings: {e}")
+
+# --- Sidebar Tools ---
 with st.sidebar.expander("Developer Tools"):
     st.write("Current Directory:", os.getcwd())
     st.write("Files:", os.listdir())
-    
     st.markdown("---")
-    st.write("**Template to Base64 Converter**")
-    st.write("If you want to embed the template in the code, upload it here to get the Base64 string.")
-    
-    dev_template = st.file_uploader("Upload Template to Convert", type=['xlsx'], key="dev_uploader")
+    st.write("**Template to Base64**")
+    dev_template = st.file_uploader("Upload to Convert", type=['xlsx'], key="dev_u")
     if dev_template:
-        bytes_data = dev_template.getvalue()
-        b64_str = base64.b64encode(bytes_data).decode()
-        st.text_area("Copy this Base64 string:", b64_str)
-
-if input_file and template_file:
-    if st.button("Process Excel Files"):
-        try:
-            with st.spinner("Processing..."):
-                result_file = process_excel(input_file, template_file)
-                
-            st.success("Processing Complete!")
-            
-            st.download_button(
-                label="Download Result Excel",
-                data=result_file,
-                file_name="processed_output.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-        except Exception as e:
-            st.error(f"An error occurred: {e}")
+        b64 = base64.b64encode(dev_template.getvalue()).decode()
+        st.text_area("Base64:", b64)
