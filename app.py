@@ -156,14 +156,15 @@ def process_excel(input_file, template_file):
     output.seek(0)
     return output
 
+import os
+
 st.set_page_config(page_title="Excel Auto-Filler", layout="wide")
 
 st.title("Excel Data Automation App")
 st.markdown("""
 **Instructions:**
-1. Upload the **Input Data File** (contains the data in C2:C48).
-2. Upload the **Template File** (the empty form).
-3. The app will create a new file with a sheet for each sheet in your Input File, filling the data into the Template.
+1. Upload the **Input Data File** (contains the data).
+2. The app will use the default **Template File** (`template.xlsx`) if available. Otherwise, please upload one.
 """)
 
 col1, col2 = st.columns(2)
@@ -172,7 +173,11 @@ with col1:
     input_file = st.file_uploader("1. Upload Input File (Data)", type=['xlsx'])
 
 with col2:
-    template_file = st.file_uploader("2. Upload Template File (Form)", type=['xlsx'])
+    if os.path.exists("template.xlsx"):
+        template_file = "template.xlsx"
+        st.success("Using default 'template.xlsx' from repository.")
+    else:
+        template_file = st.file_uploader("2. Upload Template File (Form)", type=['xlsx'])
 
 if input_file and template_file:
     if st.button("Process Excel Files"):
