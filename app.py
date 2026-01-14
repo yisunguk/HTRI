@@ -14,63 +14,123 @@ def copy_sheet(source_sheet, target_workbook, new_title):
     return target_sheet
 
 def process_excel(input_file, template_file):
-    # Load the template workbook
-    # We use openpyxl to preserve formatting
+    # Mapping Dictionary (Label -> Cell Address)
+    # Based on the user's provided image
+    MAPPING = {
+        "Service of Unit": "I8",
+        "Item No.": "AV8",
+        "Size": "E9",
+        "Type": "Y9",
+        "Surf/Unit (Gross/Eff)": "K10",
+        "Fluid Name": "T13",
+        "Fluid Quantity, Total": "T14",
+        "Temperature (In/Out)": "T20",
+        "Inlet Pressure": "AB28",
+        "Velocity": "AB29",
+        "Pressure Drop, Allow/Calc": "T30",
+        "Heat Exchanged": "M32",
+        "MTD (Corrected)": "BB32",
+        "Transfer Rate, Service": "M33",
+        "Clean": "AH33",
+        "Actual": "BB33",
+        "Design/Test Pressure": "T36",
+        "Design Temperature": "T37",
+        "No Passes per Shell": "T38",
+        "Tube No.": "F43",
+        "OD": "N43",
+        "Thk(Avg)": "AC43",
+        "Length": "AR43",
+        "Pitch": "BG43",
+        "Tube Type": "F44",
+        "Material": "AH44",
+        "Tube pattern": "BM44",
+        "Shell": "E45",
+        "ID": "U45",
+        # "OD": "AC45", # Duplicate Key "OD". Need to handle.
+        # "Shell Cover": "AU45",
+        "Channel or Bonnet": "K46",
+        "Channel Cover": "AU46",
+        "Tubesheet-Stationary": "K47",
+        "Tubesheet-Floating": "AW47",
+        "Floating Head Cover": "K48",
+        "Impingement Plate": "AW48",
+        "Baffles-Cross": "H49",
+        # "Type": "V49", # Duplicate Key "Type".
+        "%Cut (Diam)": "AM49",
+        "Spacing(c/c)": "AX49",
+        "Inlet": "BG49",
+        "TEMA Class": "BA57"
+    }
+    
+    # Handling Duplicate Keys manually by checking context or using specific labels if possible.
+    # Since we iterate Template Rows, we can check the Label.
+    # But "OD" appears for Tube (N43) and Shell (AC45).
+    # "Type" appears for Unit (Y9) and Baffles (V49).
+    # We need a smarter lookup or a list of values.
+    
+    # Enhanced Mapping with Context or List
+    # If a label appears multiple times, we can use a list of addresses to pop from.
+    # Or we can just map specific unique strings if the template has them.
+    # Assuming the Template has exact strings.
+    # Let's use a list for duplicates.
+    
+    MAPPING_LIST = {
+        "OD": ["N43", "AC45"], # 1st: Tube, 2nd: Shell
+        "Type": ["Y9", "V49"], # 1st: Unit, 2nd: Baffles
+    }
+
     template_wb = openpyxl.load_workbook(template_file)
     template_sheet = template_wb.active
     
-    # Load the input workbook
-    # data_only=True to get values, not formulas
     input_wb = openpyxl.load_workbook(input_file, data_only=True)
-    
-    # We need a base template to copy from. 
-    # We will keep the original template sheet as a "master" and copy it for each input sheet.
-    # Or, we can fill the first one and copy for the rest.
-    # Strategy: Keep the original 'Sheet1' (or active) as the master template.
-    # For each input sheet, create a new copy of the master.
-    # Finally, delete the master if it wasn't used (or keep it hidden).
-    
-    # Actually, the user said "Sheet 1 is first sheet, 2 is second sheet".
-    # So we should probably map Input Sheet 1 -> Output Sheet 1, etc.
-    
-    output_sheets = []
-    
-    # Get all sheet names from input
     input_sheet_names = input_wb.sheetnames
     
-    # We'll use the first sheet of the template as the base
-    base_template_sheet = template_wb.active
-    
+    # Iterate through each input sheet
     for i, sheet_name in enumerate(input_sheet_names):
         input_sheet = input_wb[sheet_name]
         
-        # Prepare the target sheet
-        if i == 0:
-            # For the first sheet, use the existing active sheet
-            target_sheet = base_template_sheet
-            target_sheet.title = sheet_name # Rename to match input? Or keep "1", "2"? User said "Sheet 1=1". Let's use input name.
-        else:
-            # For subsequent sheets, copy the base template
-            target_sheet = template_wb.copy_worksheet(base_template_sheet)
-            target_sheet.title = sheet_name
+        # Determine Target Column in Template
+        # Sheet 1 -> Column C (3)
+        # Sheet 2 -> Column D (4)
+        target_col_idx = 3 + i
         
-        # Transfer data
-        # Input: C2 to C48 (Rows 2 to 48, Column 3)
-        # Output: C3 to C49 (Rows 3 to 49, Column 3)
-        # 1-based index: C is column 3.
+        # Write Sheet Name/Index at the top (Row 1)
+        template_sheet.cell(row=1, column=target_col_idx).value = i + 1
         
-        # Loop 47 times (2 to 48 is 47 items)
-        for row_offset in range(47):
-            input_row = 2 + row_offset
-            output_row = 3 + row_offset
+        # Track usage of duplicates
+        duplicate_counters = {key: 0 for key in MAPPING_LIST}
+        
+        # Iterate through Template Rows (e.g., 2 to 100)
+        # We look at Column A for Labels
+        for row_idx in range(2, 100):
+            label_cell = template_sheet.cell(row=row_idx, column=1)
+            label = label_cell.value
             
-            # Read value
-            value = input_sheet.cell(row=input_row, column=3).value
-            
-            # Write value
-            target_sheet.cell(row=output_row, column=3).value = value
-            
-    # Save result to memory
+            if label:
+                label = str(label).strip()
+                
+                cell_address = None
+                
+                # Check Duplicates first
+                if label in MAPPING_LIST:
+                    counter = duplicate_counters[label]
+                    if counter < len(MAPPING_LIST[label]):
+                        cell_address = MAPPING_LIST[label][counter]
+                        duplicate_counters[label] += 1
+                
+                # Check Normal Mapping
+                elif label in MAPPING:
+                    cell_address = MAPPING[label]
+                
+                if cell_address:
+                    # Read from Input
+                    try:
+                        value = input_sheet[cell_address].value
+                        # Write to Template
+                        template_sheet.cell(row=row_idx, column=target_col_idx).value = value
+                    except Exception as e:
+                        print(f"Error reading {cell_address}: {e}")
+
     output = BytesIO()
     template_wb.save(output)
     output.seek(0)
