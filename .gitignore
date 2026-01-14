@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+dummy_*.xlsx
+processed_output.xlsx
