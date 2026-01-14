@@ -17,8 +17,9 @@ def process_excel(input_file, template_file):
     # Advanced Mapping Rules
     # Key: Label in Template
     # Value: List of rules for each occurrence of the label.
-    #   - Single String: Cell Address (e.g., "I8")
-    #   - List of Strings: Multiple Cells to merge (e.g., ["E9", "M9", "N9"])
+    #   - String: Single Cell Address (e.g., "I8")
+    #   - List: Multiple Cells to MERGE into one (e.g., ["E9", "M9", "N9"])
+    #   - Dict: Special Action (e.g., {"action": "vertical", "cells": ["T20", "AF20"]})
     
     MAPPING_RULES = {
         "Service of Unit": ["I8"],
@@ -30,10 +31,21 @@ def process_excel(input_file, template_file):
         # Shell Side (1) and Tube Side (2)
         "Fluid Name": ["T13", "AR13"], 
         "Fluid Quantity, Total": ["T14", "AR14"],
-        "Temperature (In/Out)": [ ["T20", "AF20"], ["AR20", "BD20"] ], # Merge In/Out
+        
+        # Temperature: Vertical Split (In / Out)
+        "Temperature (In/Out)": [ 
+            {"action": "vertical", "cells": ["T20", "AF20"]}, # Shell Side
+            {"action": "vertical", "cells": ["AR20", "BD20"]} # Tube Side
+        ],
+        
         "Inlet Pressure": ["AB28", "AZ28"],
         "Velocity": ["AB29", "AZ29"],
-        "Pressure Drop, Allow/Calc": [ ["T30", "AF30"], ["AR30", "BD30"] ],
+        
+        # Pressure Drop: Vertical Split (Allow / Calc)
+        "Pressure Drop, Allow/Calc": [ 
+            {"action": "vertical", "cells": ["T30", "AF30"]}, # Shell Side
+            {"action": "vertical", "cells": ["AR30", "BD30"]} # Tube Side
+        ],
         
         "Heat Exchanged": ["M32"],
         "MTD (Corrected)": ["BB32"],
@@ -71,22 +83,9 @@ def process_excel(input_file, template_file):
         "TEMA Class": ["BA57"]
     }
 
-    def get_cell_value(sheet, address_rule):
-        """
-        Retrieves value from sheet based on rule.
-        rule can be "A1" or ["A1", "B1"].
-        """
-        if isinstance(address_rule, list):
-            # Merge values
-            values = []
-            for addr in address_rule:
-                val = sheet[addr].value
-                if val is not None:
-                    values.append(str(val))
-            return " ".join(values) # Join with space
-        else:
-            # Single cell
-            return sheet[address_rule].value
+    def get_cell_value(sheet, addr):
+        val = sheet[addr].value
+        return str(val) if val is not None else ""
 
     template_wb = openpyxl.load_workbook(template_file)
     template_sheet = template_wb.active
@@ -106,11 +105,10 @@ def process_excel(input_file, template_file):
         template_sheet.cell(row=1, column=target_col_idx).value = i + 1
         
         # Track usage of duplicates for this column
-        # We reset this for each input sheet (column)
         duplicate_counters = {key: 0 for key in MAPPING_RULES}
         
         # Iterate through Template Rows
-        for row_idx in range(2, 150): # Increased range just in case
+        for row_idx in range(2, 150):
             label_cell = template_sheet.cell(row=row_idx, column=1)
             label = label_cell.value
             
@@ -125,8 +123,29 @@ def process_excel(input_file, template_file):
                         rule = rules[counter]
                         
                         try:
-                            value = get_cell_value(input_sheet, rule)
-                            template_sheet.cell(row=row_idx, column=target_col_idx).value = value
+                            if isinstance(rule, dict) and rule.get("action") == "vertical":
+                                # Vertical Split
+                                cells = rule["cells"]
+                                # Write first value to current row
+                                val1 = get_cell_value(input_sheet, cells[0])
+                                template_sheet.cell(row=row_idx, column=target_col_idx).value = val1
+                                
+                                # Write second value to next row (row_idx + 1)
+                                if len(cells) > 1:
+                                    val2 = get_cell_value(input_sheet, cells[1])
+                                    template_sheet.cell(row=row_idx + 1, column=target_col_idx).value = val2
+                                    
+                            elif isinstance(rule, list):
+                                # Merge
+                                values = [get_cell_value(input_sheet, addr) for addr in rule]
+                                merged_value = " ".join([v for v in values if v])
+                                template_sheet.cell(row=row_idx, column=target_col_idx).value = merged_value
+                                
+                            else:
+                                # Single String
+                                val = get_cell_value(input_sheet, rule)
+                                template_sheet.cell(row=row_idx, column=target_col_idx).value = val
+                                
                         except Exception as e:
                             print(f"Error processing {label} at row {row_idx}: {e}")
                         
