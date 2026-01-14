@@ -156,7 +156,30 @@ def process_excel(input_file, template_file):
     output.seek(0)
     return output
 
-import os
+import base64
+import glob
+
+# Helper to find template file
+def find_template_file():
+    # Check specific name first
+    if os.path.exists("template.xlsx"):
+        return "template.xlsx"
+    
+    # Check case-insensitive
+    for file in os.listdir():
+        if file.lower() == "template.xlsx":
+            return file
+            
+    # Check any xlsx that is not input/output/dummy
+    # This is risky but helpful if user named it "Form.xlsx"
+    xlsx_files = [f for f in os.listdir() if f.endswith(".xlsx")]
+    ignore_list = ["processed_output.xlsx", "dummy_input.xlsx", "dummy_template.xlsx"]
+    candidates = [f for f in xlsx_files if f not in ignore_list and not f.startswith("dummy_") and not f.startswith("~$")]
+    
+    if candidates:
+        return candidates[0] # Return the first likely candidate
+    
+    return None
 
 st.set_page_config(page_title="Excel Auto-Filler", layout="wide")
 
@@ -164,7 +187,7 @@ st.title("Excel Data Automation App")
 st.markdown("""
 **Instructions:**
 1. Upload the **Input Data File** (contains the data).
-2. The app will use the default **Template File** (`template.xlsx`) if available. Otherwise, please upload one.
+2. The app will automatically look for a template file in the repository.
 """)
 
 col1, col2 = st.columns(2)
@@ -173,17 +196,29 @@ with col1:
     input_file = st.file_uploader("1. Upload Input File (Data)", type=['xlsx'])
 
 with col2:
-    if os.path.exists("template.xlsx"):
-        template_file = "template.xlsx"
-        st.success("Using default 'template.xlsx' from repository.")
+    found_template = find_template_file()
+    
+    if found_template:
+        template_file = found_template
+        st.success(f"Using template file: '{found_template}'")
     else:
         template_file = st.file_uploader("2. Upload Template File (Form)", type=['xlsx'])
-        st.warning("Default 'template.xlsx' not found in repository. Please upload it to GitHub if you want to fix it.")
+        st.warning("No template file found in repository. Please upload one.")
 
-# Debugging: Show available files
-with st.sidebar.expander("Debug: File System"):
+# Debugging & Tools
+with st.sidebar.expander("Developer Tools"):
     st.write("Current Directory:", os.getcwd())
     st.write("Files:", os.listdir())
+    
+    st.markdown("---")
+    st.write("**Template to Base64 Converter**")
+    st.write("If you want to embed the template in the code, upload it here to get the Base64 string.")
+    
+    dev_template = st.file_uploader("Upload Template to Convert", type=['xlsx'], key="dev_uploader")
+    if dev_template:
+        bytes_data = dev_template.getvalue()
+        b64_str = base64.b64encode(bytes_data).decode()
+        st.text_area("Copy this Base64 string:", b64_str)
 
 if input_file and template_file:
     if st.button("Process Excel Files"):
