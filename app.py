@@ -264,15 +264,37 @@ with tab2:
     )
     
     # Save Button
-    if st.button("Save Settings"):
+    if st.button("Save Settings (Apply to Current Session)"):
         try:
             new_rules = df_to_rules(edited_df)
             st.session_state.mapping_rules = new_rules
-            st.success("Settings saved successfully! Switch to the 'Data Processing' tab to use them.")
-            # Optional: Show JSON for verification
-            # st.json(new_rules)
+            st.success("Settings applied! Switch to the 'Data Processing' tab to use them.")
         except Exception as e:
             st.error(f"Error saving settings: {e}")
+            
+    st.markdown("---")
+    st.markdown("### 💾 Backup & Restore Settings")
+    
+    # Export
+    current_rules_json = json.dumps(st.session_state.mapping_rules, indent=4, ensure_ascii=False)
+    st.download_button(
+        label="Download Settings (JSON)",
+        data=current_rules_json,
+        file_name="mapping_config.json",
+        mime="application/json"
+    )
+    
+    # Import
+    uploaded_config = st.file_uploader("Load Settings (JSON)", type=['json'])
+    if uploaded_config:
+        try:
+            loaded_rules = json.load(uploaded_config)
+            if st.button("Apply Loaded Settings"):
+                st.session_state.mapping_rules = loaded_rules
+                st.success("Settings loaded successfully! The table above will update on next interaction.")
+                st.rerun()
+        except Exception as e:
+            st.error(f"Error loading JSON: {e}")
 
 # --- Sidebar Tools ---
 with st.sidebar.expander("Developer Tools"):
